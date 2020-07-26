@@ -1,0 +1,27 @@
+{
+    "name": "homevip/token",
+    "description": "令牌",
+    "homepage": "https://github.com/homevip/token.git",
+    "license": "MIT",
+    "keywords": [
+        "library",
+        "helpers",
+        "laravel",
+        "php"
+    ],
+    "authors": [
+        {
+            "name": "homevip",
+            "email": "homevip@126.com"
+        }
+    ],
+    "require": {
+        "php": "^7.0"
+    },
+    "type": "library",
+    "autoload": {
+        "psr-4": {
+            "homevip\\": "src"
+        }
+    }
+}
