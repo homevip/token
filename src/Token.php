@@ -4,7 +4,7 @@ namespace homevip;
 
 use Illuminate\Support\Facades\Crypt;
 
-class Token implements IToken
+class Token
 {
     /**
      * 连贯操作方法
@@ -23,18 +23,19 @@ class Token implements IToken
 
 
     /**
-     * 状态模板
+     * 过期时间
+     *
+     * @var integer
+     */
+    private static $expires = 7200;
+
+
+    /**
+     * 错误码
      *
      * @var array
      */
-    protected $errorFormat = [
-        'code'      => 0,
-        'message'   => NULL,
-        'data'      => NULL,
-    ];
-
     private $errorCode = [
-        '0'     => 'OK',
         '41000' => '不合法的 aud',
         '41001' => '不合法的 iss',
         '41002' => '不合法的 token',
@@ -55,7 +56,7 @@ class Token implements IToken
      *
      * @return void
      */
-    public static function instance()
+    public static function instance(): object
     {
         if (!self::$instance instanceof self) {
             self::$instance = new self();
@@ -63,27 +64,42 @@ class Token implements IToken
         return self::$instance;
     }
 
-    public function exp(string $exp)
+
+    /**
+     * token 失效时间[多少秒后过期]
+     *
+     * @param integer $exp/秒
+     * @return object
+     */
+    public function exp(int $exp): object
     {
         $this->token['exp'] = $exp;
         return $this;
     }
 
-    public function aud(string $aud)
+
+    /**
+     * 接收该 token 的一方 可做权限判断
+     *
+     * @param string $aud public_*
+     * @return object
+     */
+    public function aud(string $aud): object
     {
         $this->token['aud'] = $aud;
         return $this;
     }
 
-    public function sub(string $sub)
+
+    /**
+     * 该 token 所面向的用户、应用,可做应用模块限制
+     *
+     * @param string $sub
+     * @return void
+     */
+    public function sub(string $sub): object
     {
         $this->token['sub'] = $sub;
-        return $this;
-    }
-
-    public function nbf(string $nbf)
-    {
-        $this->token['nbf'] = $nbf;
         return $this;
     }
 
@@ -92,9 +108,9 @@ class Token implements IToken
      * 初始化参数
      *
      * iss 	issuer 发起请求的来源用户
-     * iat 	token创建时间，unix时间戳格式  => $_SERVER['REQUEST_TIME'],
-     * exp	指定token的生命周期,unix时间戳格式 => $_SERVER['REQUEST_TIME'] + 7200,
-     * aud	接收该token 的一方 可做权限判断
+     * iat 	token 创建时间, unix时间戳格式  => $_SERVER['REQUEST_TIME'],
+     * exp	非必须。token 过期时间, unix时间戳格式  => $_SERVER['REQUEST_TIME'] + 7200,
+     * aud	非必须。接收该token 的一方 可做权限判断
      * sub	非必须。该token所面向的用户、应用,可做应用模块限制
      * nbf	非必须。not before。如果当前时间在nbf里的时间之前，则Token不被接受；一般都会留一些余地，比如几分钟 => 1357000000
      * key	非必须。TokenID 针对当前token的唯一标识 => '222we',
@@ -105,14 +121,16 @@ class Token implements IToken
      */
     public function initial()
     {
-        $time               = time();
-        $this->token['iss'] = $this->token['iss'] ?? $_SERVER['HTTP_HOST'];
-        $this->token['iat'] = $this->token['iat'] ?? $time;
-        $this->token['exp'] = $this->token['exp'] ?? $time + static::EXPIRES_IN;
-        $this->token['aud'] = $this->token['aud'] ?? 'public_*';
-        $this->token['sub'] = $this->token['sub'] ?? 'homevip@126.com';
-        $this->token['key'] = substr(md5($time), 6, 5);
-        $this->token['ip']  = getIP();
+        $newTime = $_SERVER['REQUEST_TIME'] ?? time();
+
+        $this->token['iss'] = $_SERVER['HTTP_HOST'];
+        $this->token['iat'] = $newTime;
+        $this->token['exp'] = empty($this->token['exp']) ? $newTime + self::$expires : $newTime + $this->token['exp'];
+        $this->token['key'] = substr(md5($newTime), 6, 5);
+        $this->token['ip']  = $this->getIP();
+
+        // 去除为空的值
+        $this->token = array_filter($this->token);
     }
 
 
@@ -124,8 +142,12 @@ class Token implements IToken
      */
     public function encrypt(array $param)
     {
+        // 初始化参数
         $this->initial();
-        return Crypt::encrypt(array_merge($this->token, $param));
+
+        $this->token['param'] = $param;
+        
+        return Crypt::encrypt($this->token);
     }
 
 
@@ -137,30 +159,47 @@ class Token implements IToken
      */
     public function decrypt(string $ciphertext)
     {
+        // 初始化参数
         $this->initial();
-        try {
-            if ($result = Crypt::decrypt($ciphertext)) {
-                if ($this->token['aud'] != $result['aud']) {
-                    $this->errorFormat['code']    = 41000; // 验证 aud
 
-                } elseif ($_SERVER['HTTP_HOST'] != $result['iss']) {
-                    $this->errorFormat['code']    = 41001; // 颁发令牌是否与请求是同域
-
-                } elseif (($result['iat'] + static::EXPIRES_IN) < time() || $result['exp'] < time()) {
-                    $this->errorFormat['code']    = 41002; // Token 过期
-
-                } elseif (getIP() != $result['ip']) {
-                    $this->errorFormat['code']    = 41003; // 获取令牌的ip与使用者的ip 对比
-                }
+        $result = Crypt::decrypt($ciphertext);
+        if ($result) {
+            // 验证 aud
+            if (isset($result['aud']) && $this->token['aud'] != $result['aud']) {
+                return 41000;
+            } elseif ($_SERVER['HTTP_HOST'] != $result['iss']) {
+                // 颁发令牌是否与请求是同域
+                return 41001;
+            } elseif (($result['iat'] + self::$expires) < time() || $result['exp'] < time()) {
+                // Token 过期
+                return 41002;
+            } elseif ($this->getIP() != $result['ip']) {
+                // 获取令牌的ip与使用者的ip 对比
+                return 41003;
             }
-        } catch (\Exception $e) {
-            $this->errorFormat['code']  = 41002; // 验证 aud
-            \Illuminate\Support\Facades\Log::channel('zdyErrorLog')->info($e->getMessage() . ' 异常抛出行号:' . __CLASS__ . ' 行号: ' . __LINE__);
         }
 
-        // 返回解密信息
-        $this->errorFormat['message']   = $this->errorCode[$this->errorFormat['code']];
-        $this->errorFormat['data']      = $result ?? null;
-        return $this->errorFormat;
+        return $this->token['param'];
+    }
+
+
+    /**
+     * 获取IP
+     *
+     * @return void
+     */
+    private function getIP()
+    {
+        $onlineip = '';
+        if (getenv('HTTP_CLIENT_IP') && strcasecmp(getenv('HTTP_CLIENT_IP'), 'unknown')) {
+            $onlineip = getenv('HTTP_CLIENT_IP');
+        } elseif (getenv('HTTP_X_FORWARDED_FOR') && strcasecmp(getenv('HTTP_X_FORWARDED_FOR'), 'unknown')) {
+            $onlineip = getenv('HTTP_X_FORWARDED_FOR');
+        } elseif (getenv('REMOTE_ADDR') && strcasecmp(getenv('REMOTE_ADDR'), 'unknown')) {
+            $onlineip = getenv('REMOTE_ADDR');
+        } elseif (isset($_SERVER['REMOTE_ADDR']) && $_SERVER['REMOTE_ADDR'] && strcasecmp($_SERVER['REMOTE_ADDR'], 'unknown')) {
+            $onlineip = $_SERVER['REMOTE_ADDR'];
+        }
+        return $onlineip;
     }
 }

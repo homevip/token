@@ -1,14 +1,32 @@
-##### 令牌使用
-```
+#### 使用文档
+
+
+
+##### 实例化参数
+
+```php
 use homevip;
 
-# 加密
-Token::instance()
-    ->exp('指定过期时间 [时间戳]')
-    ->aud('自定义参数, 可做参数判断')
-    ->sub('xxx')
-    ->encrypt();
-
-# 解密
-Token::instance()->decrypt($token);
+$Token = Token::instance()
+    ->exp(60)
+    ->aud('public_*')
+    ->sub('zhangsan');
 ```
+
+
+
+##### 加密
+
+```php
+$encode = $Token->encrypt([
+    'id' => 100,
+    'name' => '张三',
+]);
+```
+
+##### 解密
+
+```php
+$decode = $Token->decrypt($encode);
+```
+
